@@ -77,10 +77,9 @@ public class Shannon {
                 temp +=Integer.toString(br.readBit());
 
                 if(inv.get(temp) != null){
-
                     if(bitCount - temp.length() == 0 && lastBlockUnequal){
                         bw.writeBits(inv.get(temp), lastBlockLength);
-                        bitCount-= lastBlockLength;
+                        bitCount-= temp.length();
                     }
                     else{
                         bw.writeBits(inv.get(temp), blockLength);
