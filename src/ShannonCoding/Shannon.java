@@ -3,8 +3,7 @@ package ShannonCoding;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 
-import java.io.FileNotFoundException;
-import java.math.BigDecimal;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -20,41 +19,59 @@ import java.util.Map;
  */
 public class Shannon {
 
-    private boolean displayProbabilities;
-
     private String dataFile;
     private String encodedFile;
+    private String codeWordFile;
 
     private int blockLength = 2;
     private int writtenBitCount = 0;
 
     private int fileBlockCount = 0;
 
-
     private int lastBlockLength;
     private boolean lastBlockUnequal = false;
 
-
     private LinkedHashMap<Integer, Integer> frequencies;
-    private ArrayList<SourceProbability> probabilities;
     private BiMap<Integer, String> encodedAlphabet;
 
-    public Shannon(int blockLength, boolean displayProbabilities) {
+    private ArrayList<RationalFraction> probabilities = new ArrayList<>();
+
+    public Shannon(int blockLength) {
         this.blockLength = blockLength;
-        this.displayProbabilities = displayProbabilities;
     }
 
-    public void encode(String dataFile, String encodedFile){
+    public void encode(String dataFile, String encodedFile, String codeWordFile){
         this.dataFile = dataFile;
         this.encodedFile = encodedFile;
+        this.codeWordFile = codeWordFile;
             try
             {
+                long startTime = System.currentTimeMillis();
+                System.out.println("CALCULATING FREQUENCIES...");
                 getFrequencies();
-                getProbabilities();
-                roundProbabilities();
-                Collections.sort(this.probabilities, (o1, o2) -> -(o1.getProbability().compareTo(o2.getProbability())));
+                System.out.println("FINISHED CALCULATING FREQUENCIES, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
+
+                startTime = System.currentTimeMillis();
+                System.out.println("CALCULATING PROBABILITIES...");
+                for(Map.Entry<Integer, Integer> freq : this.frequencies.entrySet()){
+                    probabilities.add(new RationalFraction(freq.getKey(), freq.getValue(), fileBlockCount));
+                }
+                System.out.println("FINISHED CALCULATING PROBABILITIES, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
+
+                startTime = System.currentTimeMillis();
+                System.out.println("SORTING PROBABILITIES...");
+                Collections.sort(probabilities);
+                System.out.println("FINISHED SORTING PROBABILITIES, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
+
+                startTime = System.currentTimeMillis();
+                System.out.println("CALCULATING SYMBOL ENNCODING...");
                 getSymbolCoding();
+                System.out.println("FINISHED CALCULATING SYMBOL ENCODING, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
+
+                startTime = System.currentTimeMillis();
+                System.out.println("ENCODING FILE...");
                 writeToFile();
+                System.out.println("FINISHED ENCODING FILE, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
             }
             catch (FileNotFoundException e) {
                 e.printStackTrace();
@@ -63,8 +80,8 @@ public class Shannon {
 
     public void decode(String decodedFile){
 
-        System.out.println("DECODING");
-
+        long startTime = System.currentTimeMillis();
+        System.out.println("DECODING FILE...");
         try {
             BitReader br = new BitReader(this.encodedFile);
             BitWriter bw = new BitWriter(decodedFile);
@@ -93,12 +110,10 @@ public class Shannon {
         catch (FileNotFoundException e) {
             e.printStackTrace();
         }
-        System.out.println("DECODING FINISHED");
+        System.out.println("FINISHED DECODING FILE, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
     }
 
     private void writeToFile(){
-
-        System.out.println("ENCODING");
 
         try {
             BitReader br = new BitReader(this.dataFile);
@@ -127,12 +142,9 @@ public class Shannon {
         catch (FileNotFoundException e) {
             e.printStackTrace();
         }
-
-        System.out.println("ENCODING FINISHED");
     }
 
     private void getFrequencies() throws FileNotFoundException {
-        System.out.println("GETTING FREQUENCIES");
         this.frequencies = new LinkedHashMap<>();
 
         BitReader br = new BitReader(dataFile);
@@ -169,84 +181,52 @@ public class Shannon {
         }
     }
 
-    private void getProbabilities(){
-        System.out.println("CALCULATING PROBABILITIES");
-        this.probabilities = new ArrayList<>();
-
-        for(Map.Entry<Integer, Integer> entry : frequencies.entrySet()){
-            BigDecimal freq = new BigDecimal(entry.getValue());
-            BigDecimal total = new BigDecimal(fileBlockCount);
-            BigDecimal probability = freq.divide(total, 10, BigDecimal.ROUND_UP);
-            probabilities.add(new SourceProbability(entry.getKey(), probability.toString()));
-        }
-    }
-
-    //Rounds probabilities so their total sum is 1
-    private void roundProbabilities(){
-
-        System.out.println("ROUNDING PROBABILITIES");
-
-        while(this.totalProbabilitySum().compareTo(BigDecimal.ONE) != 0){
-            for(SourceProbability sa : this.probabilities){
-                if(totalProbabilitySum().compareTo(BigDecimal.ONE) > 0){
-                    sa.setProbability(sa.getProbability().subtract(new BigDecimal("0.0000000001")).toString());
-                }
-                if(totalProbabilitySum().compareTo(BigDecimal.ONE) < 0){
-                    sa.setProbability(sa.getProbability().add(new BigDecimal("0.0000000001")).toString());
-                }
-            }
-        }
-    }
-
-    private void getSymbolCoding(){
-
-        System.out.println("GETTING SYMBOL CODING");
+    private void getSymbolCoding() {
 
         this.encodedAlphabet = HashBiMap.create();
-        for (int i = 0; i < probabilities.size(); ++i) {
 
-            //base 2 logarithm of probability
-            double log = Math.log(1 / probabilities.get(i).getProbability().doubleValue()) / Math.log(2);
+        try(BufferedWriter bw = new BufferedWriter(new FileWriter(codeWordFile))) {
+            RationalFraction currSum = new RationalFraction(0, fileBlockCount);
+            for (int i = 0; i < this.probabilities.size(); ++i) {
 
-            //Length of codeword
-            int digits = (int)Math.ceil(log);
+                double l1 = Math.log(1) / Math.log(2);
+                double l2 = Math.log(probabilities.get(i).getNumerator()) / Math.log(2);
+                double l3 = Math.log(probabilities.get(i).getDenominator()) / Math.log(2);
 
-            //Probability sum
-            BigDecimal probSum = probabilitySum(i, probabilities);
+                //base2 logarithm of probability
+                double logRes = l1 - (l2 - l3);
 
-            //Binary representation of probability sum
-            String binaryProbSum = sumToBinary(probSum, digits);
+                //length of codeword
+                int digits = (int) Math.ceil(logRes);
 
-            //Code of symbol
-            String code = binaryProbSum.substring(2, binaryProbSum.length());
+                //Probability sym
+                if (i > 0) {
+                    currSum.setNumerator(currSum.getNumerator() + probabilities.get(i - 1).getNumerator());
+                }
 
-            if(displayProbabilities)
-                System.out.println(String.format("%-10d %s %5d %15s %15s" , probabilities.get(i).getByte(),
-                         probabilities.get(i).getProbability().toString(),
-                         digits, probSum.toString(), code));
-            //System.out.println(probabilities.get(i).getByte() + " " + probabilities.get(i).getProbability() + " ");
-            //System.out.printf("%10d %10f %10s %30s\n", digits, probSum, binaryProbSum, code);
-            encodedAlphabet.put(probabilities.get(i).getByte(), code);
+                //Code of symbol
+                String binSum = rationalFracToBinary(currSum, digits);
+
+                bw.write(String.format("%-10d %s %5d %15s %15s", probabilities.get(i).getRawByte(),
+                        probabilities.get(i).getRational(), digits, currSum.getRational(), binSum) + System.lineSeparator());
+                encodedAlphabet.put(probabilities.get(i).getRawByte(), binSum);
+
+            }
+        }
+        catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
-    private static BigDecimal probabilitySum(int i, ArrayList<SourceProbability> s_p){
-        BigDecimal sum = BigDecimal.ZERO;
-        for(int k = 0; k < i; ++k){
-            sum = sum.add(s_p.get(k).getProbability());
-        }
-        return sum;
-    }
-
-    private static String sumToBinary(BigDecimal probSum, int expandTo){
-
-        String binaryForm = "0.";
-        Double temp = probSum.doubleValue();
-        for(int i = 0; i < expandTo; ++i){
-            temp*= 2d;
-            if(temp >= 1){
+    private static String rationalFracToBinary(RationalFraction rf, int precision){
+        String binaryForm = "";
+        int tempNum = rf.getNumerator();
+        int tempDen = rf.getDenominator();
+        for(int i = 0; i < precision; ++i){
+            tempNum*=2;
+            if(tempNum >= tempDen){
                 binaryForm += "1";
-                temp-=1d;
+                tempNum-=tempDen;
             }
             else{
                 binaryForm += "0";
@@ -254,23 +234,4 @@ public class Shannon {
         }
         return binaryForm;
     }
-
-    public void displayFrequencies(){
-        frequencies.forEach((f, k) -> System.out.println((char)f.intValue() + " " + k));
-    }
-
-    public void displayProbabilities(){
-        for(SourceProbability sc : this.probabilities){
-            System.out.println((char)sc.getByte().intValue() + " " + sc.getProbability());
-        }
-    }
-
-    private BigDecimal totalProbabilitySum(){
-        BigDecimal probSum = BigDecimal.ZERO;
-        for(SourceProbability sc : this.probabilities){
-            probSum = probSum.add(sc.getProbability());
-        }
-        return probSum;
-    }
-
 }
