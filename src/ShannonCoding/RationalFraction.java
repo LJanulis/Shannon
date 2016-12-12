@@ -2,10 +2,11 @@ package ShannonCoding;
 
 /**
  * @author Lukas
- * Class which represents a fraction number
+ * Class which represents a fraction
  */
 public class RationalFraction implements Comparable{
 
+    //integer representation of block, used in encoding/decoding
     private int rawByte;
     private int numerator;
     private int denominator;

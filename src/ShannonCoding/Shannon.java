@@ -3,11 +3,12 @@ package ShannonCoding;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 
-import java.io.*;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.io.BufferedWriter;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.util.*;
 
 /**
  * @author Lukas
@@ -19,31 +20,44 @@ import java.util.Map;
  */
 public class Shannon {
 
-    private String dataFile;
-    private String encodedFile;
-    private String codeWordFile;
+    //Number of bits which will be read from dataFile at once and used as one word
+    private int blockLength;
 
-    private int blockLength = 2;
-    private int writtenBitCount = 0;
-
+    //Number of blocks in dataFile
     private int fileBlockCount = 0;
 
+    //Length of last block in bits, used if last block left in file is shorter than usual block length
     private int lastBlockLength;
-    private boolean lastBlockUnequal = false;
+    //To check whether last block was shorter than usual block length
+
+    private String dataFile;
+    private String encodedFile;
+
+    /*File which holds integer representation of the block, it's probability, it's code's length,
+    probability sum up to that block and block's codeword
+     */
+    private String codeDataFile;
 
     private LinkedHashMap<Integer, Integer> frequencies;
-    private BiMap<Integer, String> encodedAlphabet;
 
     private ArrayList<RationalFraction> probabilities = new ArrayList<>();
 
+    private BiMap<Integer, String> encodedAlphabet;
+
+    //Bit count of encoded blocks
+    private BigInteger encodedBlockBitCount = BigInteger.ZERO;
+
+    public Shannon() { }
+
     public Shannon(int blockLength) {
         this.blockLength = blockLength;
+        this.lastBlockLength = blockLength;
     }
 
-    public void encode(String dataFile, String encodedFile, String codeWordFile){
+    public void encode(String dataFile, String encodedFile){
         this.dataFile = dataFile;
         this.encodedFile = encodedFile;
-        this.codeWordFile = codeWordFile;
+        this.codeDataFile = "codeData.txt";
             try
             {
                 long startTime = System.currentTimeMillis();
@@ -64,13 +78,13 @@ public class Shannon {
                 System.out.println("FINISHED SORTING PROBABILITIES, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
 
                 startTime = System.currentTimeMillis();
-                System.out.println("CALCULATING SYMBOL ENNCODING...");
+                System.out.println("CALCULATING SYMBOL ENCODING...");
                 getSymbolCoding();
                 System.out.println("FINISHED CALCULATING SYMBOL ENCODING, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
 
                 startTime = System.currentTimeMillis();
                 System.out.println("ENCODING FILE...");
-                writeToFile();
+                writeEncodingToFile();
                 System.out.println("FINISHED ENCODING FILE, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
             }
             catch (FileNotFoundException e) {
@@ -78,139 +92,175 @@ public class Shannon {
             }
     }
 
-    public void decode(String decodedFile){
-
-        long startTime = System.currentTimeMillis();
-        System.out.println("DECODING FILE...");
-        try {
-            BitReader br = new BitReader(this.encodedFile);
-            BitWriter bw = new BitWriter(decodedFile);
-            int bitCount = writtenBitCount;
-            String temp = "";
-
-            BiMap<String, Integer> inv = this.encodedAlphabet.inverse();
-
-            while(bitCount > 0){
-                temp +=Integer.toString(br.readBit());
-
-                if(inv.get(temp) != null){
-                    if(bitCount - temp.length() == 0 && lastBlockUnequal){
-                        bw.writeBits(inv.get(temp), lastBlockLength);
-                        bitCount-= temp.length();
-                    }
-                    else{
-                        bw.writeBits(inv.get(temp), blockLength);
-                        bitCount-= temp.length();
-                        temp = "";
-                    }
-                }
-            }
-            bw.flush();
-        }
-        catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-        System.out.println("FINISHED DECODING FILE, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
-    }
-
-    private void writeToFile(){
+    private void writeEncodingToFile(){
 
         try {
-            BitReader br = new BitReader(this.dataFile);
+
             BitWriter bw = new BitWriter(this.encodedFile);
-            int bitCount = br.length()*8;
-            while(bitCount > 0){
-                if(bitCount < blockLength){
-                    int b = br.readBits(bitCount);
-                    String binaryRepr = encodedAlphabet.get(b);
-                    bw.writeBits(Integer.parseInt(binaryRepr, 2), binaryRepr.length());
-                    bitCount-=blockLength;
-                    writtenBitCount+=binaryRepr.length();
+
+            writeHeader(bw);
+
+            BitReader br = new BitReader(this.dataFile);
+            BigInteger dataFileBitCount = new BigInteger(Integer.toString(br.length()*8));
+            while(dataFileBitCount.compareTo(BigInteger.ZERO) > 0){
+
+                if(dataFileBitCount.compareTo(BigInteger.valueOf(blockLength)) < 0){
+                    int block = br.readBits(dataFileBitCount.intValue());
+                    String binaryRepr = this.encodedAlphabet.get(block);
+                    if(binaryRepr != null){
+                        bw.writeBits(Integer.parseInt(binaryRepr, 2), binaryRepr.length());
+                    }
                     break;
                 }
-                int b = br.readBits(this.blockLength);
 
-                String binaryRepr = encodedAlphabet.get(b);
+                int block = br.readBits(blockLength);
+                String binaryRepr = this.encodedAlphabet.get(block);
                 if(binaryRepr != null){
                     bw.writeBits(Integer.parseInt(binaryRepr, 2), binaryRepr.length());
                 }
-                bitCount -=this.blockLength;
-                writtenBitCount+=binaryRepr.length();
+
+                dataFileBitCount = dataFileBitCount.subtract(new BigInteger(Integer.toString(blockLength)));
             }
             bw.flush();
         }
-        catch (FileNotFoundException e) {
-            e.printStackTrace();
+        catch (FileNotFoundException e1) {
+            e1.printStackTrace();
         }
     }
 
-    private void getFrequencies() throws FileNotFoundException {
-        this.frequencies = new LinkedHashMap<>();
+    /**
+     * Writes encoding header to file
+     * [4 bits]: bit block length -1 (max length is 16, but it requires 5 bits while we can fit 16-1 = 15 to 4 bits)
+     * [4 bits]: last bit block length -1 (same as before, can have value from 2 to 16)
+     * [16 bits]: number of dictionary' blocks -1. Max value is 2^16 when block length is 16
+     *
+     * [8 bits] : number of trailing 0 which BitWriter appends to the end of file. E.g if 65 bits are written to file,
+     *          then BitWriter will write 9 bytes by appending 7 zeroes to the end of file.
+     *          These zeroes will have to be ignored or else they will get decoded if some block has codeWord of 0, 00, etc...
+     *
+     * [n bytes] - 'dictionary'. It's number of blocks was specified before.
+     *
+     *            Dictionary block: [bit block length bits]: integer value of bit block
+     *                              [8 bits]: length x of bit block's codeWord
+     *                              [x bits] bit block's codeword
+     */
+    private void writeHeader(BitWriter bw) throws FileNotFoundException {
 
+        //block length - 1, 4 bits
+        bw.writeBits(blockLength - 1, 4);
+        //last block length -1, 4 bits
+        bw.writeBits(lastBlockLength - 1, 4);
+
+        int dictionaryLength = this.encodedAlphabet.size();
+        //'dictionary' length -1, 16 bits
+        bw.writeBits(dictionaryLength - 1, 16);
+
+
+        //Adding reserved header lengths to encodedBitCount
+
+        //bit block length, last bit block length, dictionary block length
+        encodedBlockBitCount = encodedBlockBitCount.add(BigInteger.valueOf(4 + 4 + 16));
+
+        for(Map.Entry<Integer, String> entry : this.encodedAlphabet.entrySet()) {
+            encodedBlockBitCount = encodedBlockBitCount.add(BigInteger.valueOf(blockLength));
+            encodedBlockBitCount = encodedBlockBitCount.add(BigInteger.valueOf(8));
+            encodedBlockBitCount = encodedBlockBitCount.add(BigInteger.valueOf(entry.getValue().length()));
+        }
+
+        /*Calculating number of 0 which bitwriter automatically adds at the end of file if file's bit count
+         can not be properly divided into bytes */
+        int count = 0;
+        while(!encodedBlockBitCount.mod(BigInteger.valueOf(8)).equals(BigInteger.ZERO)){
+            encodedBlockBitCount = encodedBlockBitCount.add(BigInteger.ONE);
+            count++;
+        }
+        //Trailing zeroes, 8 bits
+        bw.writeBits(count, 8);
+
+        for(Map.Entry<Integer, String> entry : this.encodedAlphabet.entrySet()){
+            //Block integer value, blockLength bits
+            bw.writeBits(entry.getKey(), blockLength);
+
+            //Block codeWords length, 8 bits
+            bw.writeBits(entry.getValue().length(), 8);
+            //CodeWord, it's length bits
+            bw.writeBits(Integer.parseInt(entry.getValue(), 2), entry.getValue().length());
+        }
+    }
+
+    /**
+     * Gets frequencies of blocks from dataFile
+     * @throws FileNotFoundException if dataFile not found
+     */
+    private void getFrequencies() throws FileNotFoundException {
+
+        this.frequencies = new LinkedHashMap<>();
         BitReader br = new BitReader(dataFile);
         int fileBitCount = br.length()*8;
+
+        if(fileBitCount <= blockLength){
+            throw new IllegalArgumentException("Block length is bigger than or equal to total file bit count !");
+        }
+
         this.fileBlockCount = 0;
+
         while(fileBitCount > 0){
-
-            //If there are less bits in file than block length
             if(fileBitCount < blockLength) {
-                Integer temp = br.readBits(fileBitCount);
 
-                if(frequencies.containsKey(temp)){
-                    frequencies.put(temp, frequencies.get(temp) + 1);
-                }
-                else
-                    frequencies.put(temp, 1);
-
+                Integer block = br.readBits(fileBitCount);
+                addToFrequencies(block);
                 this.fileBlockCount+=1;
-
-                //For decoding if there happens to be less bits to read in file than specified block length
-                this.lastBlockUnequal = true;
                 this.lastBlockLength = fileBitCount;
-
                 break;
             }
-            Integer temp = br.readBits(blockLength);
-            if(frequencies.containsKey(temp)){
-                frequencies.put(temp, frequencies.get(temp) + 1);
-            }
-            else
-                frequencies.put(temp, 1);
+
+            Integer block = br.readBits(blockLength);
+            addToFrequencies(block);
             fileBitCount-=blockLength;
             this.fileBlockCount+=1;
         }
+    }
+
+    private void addToFrequencies(Integer block){
+        if(frequencies.containsKey(block)){
+            frequencies.put(block, frequencies.get(block) + 1);
+        }
+        else
+            frequencies.put(block, 1);
     }
 
     private void getSymbolCoding() {
 
         this.encodedAlphabet = HashBiMap.create();
 
-        try(BufferedWriter bw = new BufferedWriter(new FileWriter(codeWordFile))) {
+        try(BufferedWriter bw = new BufferedWriter(new FileWriter(codeDataFile))) {
+
+            //Sum of probabilities up to p_i not counting p_i. If p_0 then sum is 0
             RationalFraction currSum = new RationalFraction(0, fileBlockCount);
             for (int i = 0; i < this.probabilities.size(); ++i) {
 
-                double l1 = Math.log(1) / Math.log(2);
-                double l2 = Math.log(probabilities.get(i).getNumerator()) / Math.log(2);
-                double l3 = Math.log(probabilities.get(i).getDenominator()) / Math.log(2);
-
-                //base2 logarithm of probability
-                double logRes = l1 - (l2 - l3);
-
-                //length of codeword
-                int digits = (int) Math.ceil(logRes);
-
-                //Probability sym
-                if (i > 0) {
-                    currSum.setNumerator(currSum.getNumerator() + probabilities.get(i - 1).getNumerator());
+                int numer = probabilities.get(i).getNumerator();
+                int denom = probabilities.get(i).getDenominator();
+                int digits = 0;
+                while(numer < denom){
+                    numer*=2;
+                    digits++;
                 }
 
-                //Code of symbol
-                String binSum = rationalFracToBinary(currSum, digits);
+                //Calculating probability sum up to current probability
+                if (i > 0)
+                    currSum.setNumerator(currSum.getNumerator() + probabilities.get(i - 1).getNumerator());
+
+                //Getting codeword of the block
+                String codeWord = rationalFracToCodeWord(currSum, digits);
 
                 bw.write(String.format("%-10d %s %5d %15s %15s", probabilities.get(i).getRawByte(),
-                        probabilities.get(i).getRational(), digits, currSum.getRational(), binSum) + System.lineSeparator());
-                encodedAlphabet.put(probabilities.get(i).getRawByte(), binSum);
+                        probabilities.get(i).getRational(), digits, currSum.getRational(), codeWord) + System.lineSeparator());
+                //Assigning block it's codeword
+                encodedAlphabet.put(probabilities.get(i).getRawByte(), codeWord);
 
+                BigInteger temp = BigInteger.valueOf(probabilities.get(i).getNumerator()*codeWord.length());
+                encodedBlockBitCount = encodedBlockBitCount.add(temp);
             }
         }
         catch (IOException e) {
@@ -218,20 +268,96 @@ public class Shannon {
         }
     }
 
-    private static String rationalFracToBinary(RationalFraction rf, int precision){
-        String binaryForm = "";
+    /**
+     * Converts fraction to it's codeword with specified precision
+     * @param rf fraction
+     * @param precision decimal spaces to take after 0.
+     * @return codeword
+     */
+    private static String rationalFracToCodeWord(RationalFraction rf, int precision){
+        String codeWord = "";
         int tempNum = rf.getNumerator();
         int tempDen = rf.getDenominator();
+
         for(int i = 0; i < precision; ++i){
             tempNum*=2;
             if(tempNum >= tempDen){
-                binaryForm += "1";
+                codeWord += "1";
                 tempNum-=tempDen;
             }
-            else{
-                binaryForm += "0";
-            }
+            else
+                codeWord += "0";
         }
-        return binaryForm;
+        return codeWord;
+    }
+
+    public void decode(String encodedFile, String decodedFile) {
+
+        long startTime = System.currentTimeMillis();
+        System.out.println("DECODING...");
+
+        this.encodedAlphabet = HashBiMap.create();
+
+        try {
+            BitWriter bw = new BitWriter(decodedFile);
+            BitReader br = new BitReader(encodedFile);
+            BigInteger encodedFileLength = new BigInteger(Integer.toString(br.length() * 8));
+
+            encodedFileLength = getDictionary(br, encodedFileLength);
+
+            BiMap<String, Integer> inverseDictionary = this.encodedAlphabet.inverse();
+
+            String bitSequence = "";
+            while (encodedFileLength.compareTo(BigInteger.valueOf(uselessZeroes)) > 0) {
+                bitSequence+= Integer.toString(br.readBit());
+                if(inverseDictionary.get(bitSequence) != null){
+                    if((encodedFileLength.subtract(BigInteger.valueOf(bitSequence.length())).intValue() == uselessZeroes)){
+                        bw.writeBits(inverseDictionary.get(bitSequence), lastBlockLength);
+                        break;
+                    }
+                    bw.writeBits(inverseDictionary.get(bitSequence), blockLength);
+                    encodedFileLength = encodedFileLength.subtract(BigInteger.valueOf(bitSequence.length()));
+                    bitSequence = "";
+                }
+            }
+            bw.flush();
+        }
+        catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        System.out.println("DECODING FINISHED, TIME ELAPSED: " + (System.currentTimeMillis() - startTime) + " milis");
+    }
+
+    private int uselessZeroes = 0;
+
+    private BigInteger getDictionary(BitReader br, BigInteger fileLength){
+        this.encodedAlphabet = HashBiMap.create();
+
+        this.blockLength = br.readBits(4) + 1;
+        this.lastBlockLength = br.readBits(4) + 1;
+        int dictionarySize = br.readBits(16) + 1;
+        this.uselessZeroes = br.readBits(8);
+        fileLength = fileLength.subtract(BigInteger.valueOf(4 + 4 + 16 + 8));
+
+        //System.out.println(uselessZeroes + " " + blockLength + " " + lastBlockLength + " " + dictionarySize);
+
+        for(int i = 0; i < dictionarySize; ++i){
+            int block = br.readBits(blockLength);
+            fileLength = fileLength.subtract(BigInteger.valueOf(blockLength));
+            int codeWordLen = br.readBits(8);
+            fileLength = fileLength.subtract(BigInteger.valueOf(8));
+            String codeWord = "";
+            while(codeWordLen > 0){
+                int bt = br.readBit();
+                fileLength = fileLength.subtract(BigInteger.ONE);
+                if(bt == 0)
+                    codeWord+="0";
+                if(bt == 1)
+                    codeWord+="1";
+                codeWordLen--;
+            }
+            this.encodedAlphabet.put(block, codeWord);
+        }
+        return fileLength;
     }
 }
